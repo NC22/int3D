@@ -1,0 +1,184 @@
+<html>
+<head>
+<meta charset="UTF-8">
+<title>nradiowave - simple camera int</title>   
+<meta name="viewport" content="width=device-width, minimum-scale=1, initial-scale=1">
+<link href="style.css" rel="stylesheet" />
+</head>
+<body>
+
+
+<canvas id="screen"></canvas>
+
+<script>
+var model_polys = [
+    [ 0, 1, 3, 2 ],
+    [ 3, 2, 5, 4 ],
+    [ 5, 4, 7, 6 ],
+    [ 7, 6, 0, 1 ],
+    [ 4, 2, 6, 1 ],
+];
+
+var model_vert = [
+    [ 204, 241, 202 ],
+    [ 204, -165, 202 ],
+    [ 202, -165, -204 ],
+    [ 202, 241, -204 ],
+    [ -204, -165, -202 ],
+    [ -204, 241, -202 ],
+    [ -202, -165, 204 ],
+    [ -202, 241, 204 ],
+];
+
+const SCALE = 2048;
+const ONE = 4096;
+
+// ================= SIN / COS LUT =================
+
+const sinLUT = new Int16Array(ONE);
+
+for (let i = 0; i < ONE; i++) {
+    sinLUT[i] = (Math.sin(i * 2 * Math.PI / ONE) * SCALE) | 0;
+}
+
+function isin(a) {
+    return sinLUT[a & (ONE - 1)];
+}
+
+function icos(a) {
+    return sinLUT[(a + (ONE >> 2)) & (ONE - 1)];
+}
+
+// ================= RENDERER =================
+
+function kellyRenderer() {
+
+    const bgColor = "#373737";
+    const lineColor = "#fff";
+    const FPS = 30;
+
+    const screen = document.getElementById('screen');
+    const screenCtx = screen.getContext("2d");
+
+    const screenW = 320;
+    const screenH = 240;
+    const ASPECT = screenW / screenH; 
+    
+    var pos = [0,0,1048];
+
+    let angle = 0;
+    const self = this;
+
+    function getScreenCoords(p) {
+        return {
+            x: ((p.x + SCALE) * screen.width) / (2 * SCALE) | 0,
+            y: ((SCALE - p.y) * screen.height) / (2 * SCALE) | 0,
+        };
+    }
+
+    function project3Dto2D({ x, y, z }) {
+        return {
+            x: (x * SCALE / z) | 0,
+            y: (y * ASPECT *  SCALE / z) | 0,
+        };
+    }
+
+    function rotate_xz_int(v, a) {
+        const s = isin(a);
+        const c = icos(a);
+        
+        return {
+            x: ((v[0] * c - v[2] * s) >> 11) + pos[0],
+            y: v[1] + pos[1],
+            z: ((v[0] * s + v[2] * c) >> 11)  + pos[2],
+        };
+    }
+    
+    function line(p1, p2) {
+        let x0 = p1.x | 0;
+        let y0 = p1.y | 0;
+        let x1 = p2.x | 0;
+        let y1 = p2.y | 0;
+
+        let dx = Math.abs(x1 - x0);
+        let dy = Math.abs(y1 - y0);
+        let sx = x0 < x1 ? 1 : -1;
+        let sy = y0 < y1 ? 1 : -1;
+        let err = dx - dy;
+
+        screenCtx.fillStyle = lineColor;
+
+        while (true) {
+            screenCtx.fillRect(x0, y0, 1, 1);
+
+            if (x0 === x1 && y0 === y1) break;
+
+            let e2 = err << 1;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 <  dx) { err += dx; y0 += sy; }
+        }
+    }
+
+
+    function polyToScreen(poly) {
+        for (let i = 0; i < poly.length; i++) {
+            poly[i] = getScreenCoords(project3Dto2D(poly[i]));
+        }
+        
+        return poly;
+        
+    }
+
+    this.update = function () {
+
+        screenCtx.fillStyle = bgColor;
+        screenCtx.fillRect(0, 0, screen.width, screen.height);
+
+        angle = (angle + 16) & (ONE - 1);
+
+        for (const poly of model_polys) {
+
+            var rotatedPoly = poly.map(i =>
+                rotate_xz_int(model_vert[i], angle)
+            );
+            
+          //  console.log(rotatedPoly);
+            
+           // debugger;
+            polyToScreen(rotatedPoly);
+
+           // console.log(rotatedPoly);
+            
+           //  debugger;
+            line(rotatedPoly[0], rotatedPoly[1]);
+            line(rotatedPoly[1], rotatedPoly[3]);
+            line(rotatedPoly[3], rotatedPoly[2]);
+            line(rotatedPoly[2], rotatedPoly[0]);
+           //  line(rotatedPoly[3], rotatedPoly[2]);
+           //  line(rotatedPoly[2], rotatedPoly[3]);
+           // line(rotatedPoly[3], rotatedPoly[0]);
+            
+        }
+        
+        setTimeout(self.update, 1000 / FPS);
+    };
+
+    this.init = function () {
+        screen.width = screenW;
+        screen.height = screenH;
+        self.update();
+    };
+}
+
+
+var tt = new kellyRenderer();
+tt.init();
+
+</script>
+<br><br><br>
+<a href="camera.html">added camera</a>
+
+
+</body>
+
+</html>

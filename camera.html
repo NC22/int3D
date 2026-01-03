@@ -1,0 +1,287 @@
+<html>
+<head>
+<meta charset="UTF-8">
+<title>nradiowave - simple camera int</title>   
+<meta name="viewport" content="width=device-width, minimum-scale=1, initial-scale=1">
+<link href="style.css" rel="stylesheet" />
+</head>
+<body style="background : #373737;">
+
+
+<canvas id="screen"></canvas>
+
+<script src="spider.js"></script>
+<script src="cube.js"></script>
+<script>
+
+
+// Экпорт оптимизирован под совместимость с PS1 
+//  - Ось Y инвертирована
+//  - Масштаб экспорта значений из блендера vertex.x y z * 100
+//  - напрямую float операции не применяются (только генерация таблицы sin перед началом) | только целочисленные вычисления
+
+const SCALE = 2048; // пропорциональный вывод на экран - весь экран - область видимости SCALE единиц мира
+const ONE = 4096;   // масштаб целочисленных вычислений
+
+const sinLUT = new Int16Array(ONE);
+
+for (let i = 0; i < ONE; i++) {
+    sinLUT[i] = (Math.sin(i * 2 * Math.PI / ONE) * SCALE) | 0;
+}
+
+function isin(a) {
+    return sinLUT[a & (ONE - 1)];
+}
+
+function icos(a) {
+    return sinLUT[(a + (ONE >> 2)) & (ONE - 1)];
+}
+
+const keys = {};
+
+window.addEventListener("keydown", e => keys[e.key] = true);
+window.addEventListener("keyup",   e => keys[e.key] = false);
+
+function SceneObject(verts, polys, x, y, z) {
+    
+    this.verts = verts;
+    this.polys = polys;
+    this.pos = [x, y, z];
+    this.rotY = 0;
+    this.rotSpeed = 8;
+    
+}
+
+function SceneCamera(x, y, z) {
+    this.pos = [x, y, z];
+    this.rotY = 0;
+    this.speed = 32;
+    this.rotSpeed = 32;
+    
+    var self = this;
+    this.update = function() {
+    
+        if (keys["ArrowRight"])  self.rotY = (self.rotY - self.rotSpeed) & (ONE - 1);
+        if (keys["ArrowLeft"]) self.rotY = (self.rotY + self.rotSpeed) & (ONE - 1);
+
+
+        const s = isin(self.rotY);
+        const c = icos(self.rotY);
+
+        if (keys["ArrowUp"]) {
+            self.pos[0] -= (s * self.speed) >> 11;
+            self.pos[2] += (c * self.speed) >> 11;
+        }
+
+        if (keys["ArrowDown"]) {
+            self.pos[0] += (s * self.speed) >> 11;
+            self.pos[2] -= (c * self.speed) >> 11;
+        }
+    }
+}
+    
+
+
+function kellyRenderer() {
+
+    const bgColor = "#373737";
+    const lineColor = "#fff";
+    const FPS = 60;
+    const FRAME_TIME = 1000 / FPS;
+    
+    let last = 0;
+    let fps = 0;
+    let frames = 0;
+    let fpsLastTime = 0;
+
+    const screen = document.getElementById('screen');
+    const screenCtx = screen.getContext("2d");
+
+    const screenW = 320;
+    const screenH = 240;
+    const screenRatio = screenW / screenH; 
+    
+    
+    let angle = 0;
+    const self = this;
+    
+    var camera = new SceneCamera(-1245,0,176);
+        camera.rotY = 3264;
+        
+    var poolObjects = [];
+        poolObjects.push(new SceneObject(spider_model_vert, spider_model_polys, 0,0,0));
+        poolObjects.push(new SceneObject(cube_model_vert, cube_model_polys, 0,0,1512));
+        poolObjects[1].rotSpeed = 32;
+        
+    function getScreenCoords(p) {
+        return {
+            x: ((p.x + SCALE) * screen.width) / (2 * SCALE) | 0,
+            y: ((p.y + SCALE) * screen.height) / (2 * SCALE) | 0, // инвертирована для PS1. Y -1 - вверх / если обычный расклад то ---->> ((SCALE - p.y) * screen.height) / (2 * SCALE) | 0,
+        };
+    }
+
+    function project3Dto2D({ x, y, z }) {
+        return {
+            x: (x * SCALE / z) | 0,
+            y: (y * screenRatio *  SCALE / z) | 0,
+        };
+    }
+    
+    // линия без сглаживания просто заполняем - длинну пикселями
+    
+    function line(p1, p2) {
+    
+        let x0 = p1.x | 0;
+        let y0 = p1.y | 0;
+        let x1 = p2.x | 0;
+        let y1 = p2.y | 0;
+
+        let dx = Math.abs(x1 - x0);
+        let dy = Math.abs(y1 - y0);
+        let sx = x0 < x1 ? 1 : -1;
+        let sy = y0 < y1 ? 1 : -1;
+        let err = dx - dy;
+
+        screenCtx.fillStyle = lineColor;
+
+        while (true) {
+            screenCtx.fillRect(x0, y0, 1, 1);
+
+            if (x0 === x1 && y0 === y1) break;
+
+            let e2 = err << 1;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 <  dx) { err += dx; y0 += sy; }
+        }
+    }
+    
+    function transformObjectVertex(v, obj) {
+        const s = isin(obj.rotY);
+        const c = icos(obj.rotY);
+
+        const x = ((v[0] * c - v[2] * s) >> 11) + obj.pos[0];
+        const z = ((v[0] * s + v[2] * c) >> 11) + obj.pos[2];
+
+        return {
+            x: x,
+            y: v[1] + obj.pos[1],
+            z: z,
+        };
+    }
+
+    function worldToView(v) {
+        const dx = v.x - camera.pos[0];
+        const dz = v.z - camera.pos[2];
+
+        const s = isin(-camera.rotY & (ONE - 1));
+        const c = icos(-camera.rotY & (ONE - 1));
+
+        return {
+            x: (dx * c - dz * s) >> 11,
+            y: v.y - camera.pos[1],
+            z: (dx * s + dz * c) >> 11,
+        };
+    }
+    
+    this.update = function () {
+        
+        camera.update();
+        
+        screenCtx.fillStyle = bgColor;
+        screenCtx.fillRect(0, 0, screen.width, screen.height);
+
+
+        for (const obj of poolObjects) {
+
+            obj.rotY = (obj.rotY + obj.rotSpeed) & (ONE - 1);
+            for (const poly of obj.polys) {
+            
+                 
+                var verts = [];
+
+                for (let i = 0; i < poly.length; i++) {
+                    if (poly[i] === -1) continue;
+
+                    let v = transformObjectVertex(obj.verts[poly[i]], obj); // вершина объекта с учетом его поворота
+                    v = worldToView(v); // вершина объекта относительно взгляда камеры
+
+                    if (v.z < 64) {
+                        verts = [];
+                        break;
+                    } // near plane
+                    
+                    verts.push(
+                        getScreenCoords( // 2д координата в масштабе экранных координат
+                            project3Dto2D(v) // вершина спроецированная в 2д пространство 
+                        )
+                    );
+                }
+
+                if (verts.length === 4) {
+                    line(verts[0], verts[1]);
+                    line(verts[1], verts[3]);
+                    line(verts[3], verts[2]);
+                    line(verts[2], verts[0]);
+                } else if (verts.length === 3) {
+                    line(verts[0], verts[1]);
+                    line(verts[1], verts[2]);
+                    line(verts[2], verts[0]);
+                }
+            }
+            
+        }
+        
+        screenCtx.fillStyle = lineColor;
+        screenCtx.font = "9px Courier New";
+        screenCtx.textBaseline = "top";
+        screenCtx.textAlign = "left";
+
+        screenCtx.fillText("POS:" + camera.pos[0] + "," + camera.pos[1] + "," + camera.pos[2] + " ROT: " + camera.rotY, 8, 8);
+        screenCtx.fillText("FPS:" + fps, 8, 16);
+
+    };
+
+    function loop(time) {
+        var delta = time - last;
+        if (delta > 250) {
+            delta = FRAME_TIME; // слишком долго не было апдейта - пауза или вкладка спала - более 250 мс - считаем что прошол только один кадр
+            last = time-FRAME_TIME;
+        }
+        
+        if (delta >= FRAME_TIME) {
+            last += FRAME_TIME;
+            self.update();
+            frames++;
+        }
+        
+        if (time - fpsLastTime >= 1000) {
+            fps = frames;
+            frames = 0;
+            fpsLastTime = time;
+        }
+        requestAnimationFrame(loop);
+    }
+
+    
+    this.init = function () {
+        screen.width = screenW;
+        screen.height = screenH;
+
+        requestAnimationFrame(loop);
+    };
+}
+
+
+var tt = new kellyRenderer();
+tt.init();
+
+</script>
+<br>
+Camera controll - arrows
+<br><br><br>
+<a href="index.html" style="">home</a> 
+
+
+</body>
+
+</html>
